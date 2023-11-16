@@ -1,0 +1,660 @@
+---
+title: "Exercise 11 - Spatial Regression"
+author: "Robert Windham"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: true
+    collapsed: no
+    smooth_scroll: yes
+    df_print: paged
+  pdf_document: default
+  html_notebook:
+    df_print: paged
+    rows.print: 10
+    theme: cosmo
+    highlight: breezedark
+    number_sections: yes
+    toc: yes
+    toc_float: 
+      collapsed: no
+      smooth_scroll: yes
+editor_options:
+  chunk_output_type: inline
+  mode: gfm
+---
+
+
+
+```{r Packages, message=FALSE, warning=FALSE, include=FALSE}
+#install.packages('pacman')
+
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+
+packages_needed <- c("biscale", "car", "cleangeo", "cowplot", "geosphere", "maps", "mapproj", "maptools", "spatialreg", "spdep", "sf",  "tidyverse","visreg")
+
+
+sapply(packages_needed, require, character.only=T)
+
+#pk_to_install <- packages_needed [!( packages_needed %in% rownames(installed.packages())  )]
+#if(length(pk_to_install)>0 ){
+#  install.packages(pk_to_install,repos="http://cra n.r-project.org")
+#}
+
+
+
+```
+
+
+```{r import data, include=FALSE}
+
+
+data <- read.csv('https://raw.githubusercontent.com/chrismgentry/Spatial-Regression/master/Data/childpov18_southfull.csv', 
+                 colClasses = c("character", "character", "character", 
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric", 
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric", 
+                                "numeric", "numeric", "numeric", "numeric",
+                                "numeric", "numeric", "numeric", "numeric"))
+
+
+
+
+```
+
+
+```{r data fixing, include=FALSE}
+
+names(data)[names(data)=="X2016.child.poverty"] <- "child.pov.2016"
+
+
+
+
+```
+
+
+
+```{r data fixing2, include=FALSE}
+
+sc_pov <- data %>% subset(State == "SC")
+
+
+summary(sc_pov)
+
+
+```
+
+
+
+
+
+# Equation
+
+
+```{r data fixing3, echo=TRUE}
+
+
+equation <- child.pov.2016 ~ rural + urban + lnlesshs + lnunemployment + lnsinglemom + lnuninsured +
+  lnconstruction + lnhealthss + lnretail + lnblack + lnhispanic + lnincome_ratio + lnteenbirth
+
+
+options(scipen = 5)
+
+
+
+ols <- lm(equation, data=sc_pov)
+summary(ols)
+
+
+```
+
+
+
+
+
+
+
+```{r data fixing4, echo=FALSE}
+
+par(mfrow=c(4,4), mar=c(2, 2, 2, 2))
+visreg(ols)
+
+
+
+```
+
+
+
+
+
+
+```{r data fixing5, include=FALSE}
+
+fips <- county.fips
+fips.codes <- separate(data = fips, col = polyname, into = c("state", "county"), sep = ",")
+sc_fips <- subset(fips.codes, state=="texas", select=fips)
+
+se_shp <- st_read(file.path("se_counties/se_counties.shp"))
+
+sc_sf <- se_shp %>% subset(STATE_NAME == "South Carolina")
+
+
+
+
+```
+
+
+
+
+
+## Moran's Correlation
+
+
+
+
+```{r data fixing6}
+
+
+neighb.data <- poly2nb(sc_sf, queen=T)
+cont.neighb <- nb2listw(neighb.data,style="W", zero.policy = TRUE)
+
+
+lm.morantest(ols, cont.neighb)
+
+```
+
+
+
+**We can see there is spatial correlation between residuals**
+
+
+
+
+
+## LaGrange Multiplier Test
+
+
+```{r data fixing7, echo=FALSE}
+
+
+
+lm.LMtests(ols, cont.neighb, test="all")
+
+
+
+
+
+```
+
+
+**None are significant, so we would likely want to keep our OLS results**
+
+
+
+
+
+
+# Spatially Lagged X Model 
+
+
+
+```{r data fixing8, echo=FALSE}
+
+
+SLX.model <- spatialreg::lmSLX(equation, data=sc_pov, cont.neighb)
+summary(SLX.model)
+
+
+```
+
+
+
+## Combined x & lagged x impacts
+
+
+
+```{r data fixing9, echo=FALSE}
+
+
+summary(spatialreg::impacts(SLX.model, cont.neighb), zstats = TRUE)[["pzmat"]]
+
+```
+
+
+
+
+
+# Spatial Lag Model
+
+
+
+```{r data fixing10, echo=FALSE}
+
+
+sp.lag.model <- spatialreg::lagsarlm(equation, data=sc_pov, cont.neighb)
+summary(sp.lag.model, Nagelkerke = TRUE)
+
+
+
+```
+
+
+
+
+## Spatial lag mpact Table
+
+
+
+
+
+```{r data fixing11, echo=FALSE}
+
+
+summary(spatialreg::impacts(sp.lag.model, listw = cont.neighb, R=100), zstats = TRUE)[["pzmat"]]
+
+
+```
+
+
+
+
+
+
+
+
+# Spatial Error Model
+
+
+
+
+
+
+
+
+```{r data fixing12, echo=FALSE}
+
+
+
+sp.err.model <- spatialreg::errorsarlm(equation, data=sc_pov, cont.neighb)
+summary(sp.err.model, Nagelkerke = TRUE)
+
+
+```
+
+
+Even though our Spatial Error Model is nonsignificant, our significant log variables include less than highschool education, rate of unemployment, single mother households, percent uninsured, and percent of the population that work in construction/retail.
+
+
+
+
+
+**SLX Model - Adj R-squared = .7311, p-value = .0001274**
+
+
+**Lag Model - R-squared = .838, p-value = .14104**
+
+
+**Err Model - R-squared = .84823, p-value = .060513**
+
+
+
+**Even though our Error Model is nonsignificant, we are going to use it because it has the highest explanatory power**
+
+
+
+
+
+
+# Hausman test
+
+
+
+
+```{r data fixing13, echo=FALSE}
+
+
+spatialreg::Hausman.test(sp.err.model)
+
+
+```
+
+
+
+**Since it is not significant, we are good to use our error model.**
+
+
+
+
+
+
+
+
+
+```{r data fixing14, include=FALSE}
+
+
+
+sd.err <- spatialreg::errorsarlm(equation, sc_pov, cont.neighb, etype = "emixed")
+sdm <- spatialreg::lagsarlm(equation, sc_pov, cont.neighb, type = "mixed")
+
+
+
+
+
+```
+
+
+
+
+
+# Nested Durbin Error Model
+
+
+```{r data fixing15, echo=FALSE}
+
+
+summary(sd.err, Nagelkerke = TRUE)
+
+
+```
+
+
+
+
+## Impacts analysis
+
+
+
+```{r data fixing16}
+
+
+summary(spatialreg::impacts(sd.err, listw = cont.neighb, R = 100), zstats = TRUE)[["pzmat"]]
+
+
+```
+
+**Not many variables are significant here**
+
+
+
+
+# Comparing models
+
+
+
+```{r data fixing17, echo=FALSE}
+
+
+LR.Sarlm(sd.err, sp.err.model)
+
+
+```
+
+
+
+**Here we would not reject the null hypothesis, so we can restrict our model to a spatial error model.**
+
+
+
+
+
+
+```{r data fixing18, include=FALSE}
+
+
+sc.xy <- st_centroid(sc_sf)
+
+all.dist.k1 <- knn2nb(knearneigh(sc.xy, k=1, longlat = TRUE))
+
+all.dist.k3 <- knn2nb(knearneigh(sc.xy, k=3, longlat = TRUE))
+
+all.dist.k5 <- knn2nb(knearneigh(sc.xy, k=5, longlat = TRUE))
+
+all.max.k1 <- max(unlist(nbdists(all.dist.k1, sc.xy, longlat=TRUE)))
+
+all.max.k3 <- max(unlist(nbdists(all.dist.k3, sc.xy, longlat=TRUE)))
+
+all.max.k5 <- max(unlist(nbdists(all.dist.k5, sc.xy, longlat=TRUE)))
+
+
+all.sp.dist.k1 <- dnearneigh(sc.xy, d1=0, d2=1 * all.max.k1, longlat = TRUE)
+
+all.sp.dist.k3 <- dnearneigh(sc.xy, d1=0, d2=1 * all.max.k3, longlat = TRUE)
+
+all.sp.dist.k5 <- dnearneigh(sc.xy, d1=0, d2=1 * all.max.k5, longlat = TRUE)
+
+
+all.dist.neighb.k1 <- nb2listw(all.sp.dist.k1,style="W", zero.policy = TRUE)
+
+all.dist.neighb.k3 <- nb2listw(all.sp.dist.k3,style="W", zero.policy = TRUE)
+
+all.dist.neighb.k5 <- nb2listw(all.sp.dist.k5,style="W", zero.policy = TRUE)
+
+all.dist.lag.k1 <- spatialreg::lagsarlm(equation, data = sc_pov, listw = all.dist.neighb.k1)
+
+all.dist.lag.k3 <- spatialreg::lagsarlm(equation, data = sc_pov, listw = all.dist.neighb.k3)
+
+all.dist.lag.k5 <- spatialreg::lagsarlm(equation, data = sc_pov, listw = all.dist.neighb.k5)
+
+
+
+
+
+
+
+```
+
+
+
+
+
+
+# Distance Lag Model
+
+
+
+
+```{r data fixing19, echo=FALSE}
+
+summary(all.dist.lag.k3, Nagelkerke = TRUE)
+
+
+
+```
+
+
+```{r data fixing20, include=FALSE}
+
+all.dist.err.k1 <- spatialreg::errorsarlm(equation, data = sc_pov, listw = all.dist.neighb.k1)
+all.dist.err.k3 <- spatialreg::errorsarlm(equation, data = sc_pov, listw = all.dist.neighb.k3)
+all.dist.err.k5 <- spatialreg::errorsarlm(equation, data = sc_pov, listw = all.dist.neighb.k5)
+
+
+
+```
+
+
+
+
+
+
+# Distance Error Model
+
+
+
+```{r data fixing21, echo=FALSE}
+
+summary(all.dist.err.k3, Nagelkerke = TRUE)
+
+
+
+```
+
+
+
+**Distance Lag Model: R-squared = .83, p-value = .933**
+
+**Distance Error Model: R-squared = .84855, p-value = .057019**
+
+
+
+
+
+
+
+
+
+```{r data fixing22, include=FALSE}
+
+
+dist.err.data <- summary(all.dist.err.k3, correlation=TRUE, Nagelkerke = TRUE)
+
+dist.err.output <- cbind.data.frame(sc_pov$FIPS,
+                                    dist.err.data$fitted.values, 
+                                    dist.err.data$residual, 
+                                    sc_pov$child.pov.2016, 
+                                    sc_pov$lnsinglemom, 
+                                    sc_pov$lnuninsured,
+                                    sc_pov$lnunemployment,
+                                    sc_pov$lnretail,
+                                    sc_pov$lnconstruction,
+                                    sc_pov$lnlesshs, 
+                                    sc_pov$lnteenbirth,
+                                    stringsAsFactors = FALSE)
+
+#Renaming columns
+colnames(dist.err.output) <- c("fips","fitted","resid","childpov",
+                        "single_mom","uninsured","unemployment","retail","construction","less_hs","teenbirth")
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r data fixing23, include=FALSE}
+
+
+sc_poly <- merge(x = sc_sf, y = dist.err.output, 
+                 by.x = "FIPS", by.y = "fips", all = TRUE)
+
+bivariate_data <- bi_class(sc_poly, x = childpov, y = unemployment, 
+                           dim = 3, style = "quantile")
+
+legend <- bi_legend(pal = "DkViolet",
+                    dim = 3,
+                    xlab = "Child Poverty",
+                    ylab = "Unemployment rate",
+                    size = 6)
+
+
+
+
+
+```
+
+
+
+
+
+
+```{r data fixing24, include=FALSE}
+
+world <- map_data("world")
+states <- map_data("state")
+southern_states <- subset(states, region %in% 
+                            c("texas", "arkansas", "louisiana", "mississippi", 
+                              "alabama", "georgia", "florida", "north carolina",
+                              "south carolina", "tennessee", "oklahoma", 
+                              "kentucky", "west virginia", "virginia", 
+                              "maryland", "delaware", "district of columbia"))
+
+
+
+
+
+```
+
+
+
+
+
+```{r data fixing25, include=FALSE}
+
+
+unem_pov_map <- ggplot() + 
+  geom_polygon(data = world, aes(x=long,y=lat, group=group), fill = "gray95", color = "white") +
+  geom_polygon(data = states, aes(x=long,y=lat, group=group), fill = "gray", color = "white") +
+  geom_polygon(data = southern_states, aes(x=long,y=lat, group=group), fill = NA, size = 0.01, color = "white") +  
+  geom_sf(data = bivariate_data, aes(fill = bi_class), color = "grey50", show.legend = FALSE) +  
+  bi_scale_fill(pal = "DkViolet", dim = 3) +
+  coord_sf(crs = 4326, xlim=c(-84,-78), ylim=c(31.7,35.5)) +
+  theme_void() + theme(legend.title.align=0.5) +
+  theme(panel.background = element_rect(fill = 'deepskyblue'),
+        panel.grid.major = element_line(colour = NA)) +
+  labs(x = "Longitude", y = "Latitude", fill = "Child Poverty", 
+       title = "Bivariate Map of Child Poverty and Unemployment rate") +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+
+
+
+
+
+
+```
+
+
+
+
+
+# Map
+
+
+
+
+
+```{r data fixing26, echo=FALSE}
+
+
+final_map <- ggdraw() +
+
+draw_plot(unem_pov_map, 0, 0, 1, 1) +
+
+draw_plot(legend, 0.63, 0.035, 0.25, 0.25)
+
+final_map
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
